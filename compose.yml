@@ -5,9 +5,9 @@ services:
     ports:
       - "8080:8080"
     environment:
-      APP_UPSTREAM: http://bagetter:8080
-      APP_STORE_PATH: /store
+      EABP_UPSTREAM_URI: http://bagetter:8080
+      EABP_ACCOUNTS_DIR: /accounts
     volumes:
-      - ./data/store:/store
+      - ./data/sccounts:/accounts
   bagetter:
     image: bagetter/bagetter

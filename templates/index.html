@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Easy Basic Auth Proxy</title>
+    <link href="{{.AuthURI}}/assets/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <h2>Easy Basic Auth Proxy</h2>
+        <form method="post">
+            <div class="mb-3">
+                <label class="form-label" for="username">Username</label>
+                <div class="input-group">
+                    <input class="form-control" id="username" type="text" size="64" value="{{.Username}}" readonly />
+                    <button class="btn btn-outline-secondary" type="button"
+                        data-clipboard-target="#username">Copy</button>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="password">Password</label>
+                <div class="input-group">
+                    <input class="form-control" id="password" type="password" size="64" value="{{.Password}}"
+                        readonly />
+                    <button class="btn btn-outline-secondary" type="button"
+                        data-clipboard-target="#password">Copy</button>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="expresOn">Password expires on</label>
+                <input class="form-control" id="expiresOn" type="text" size="64" value="{{.ExpiresOn}}" readonly />
+            </div>
+            <a class="btn btn-primary" target="_blank" href="/">Open web site in new tab</a>
+            <button class="btn btn-secondary" type="submit">Generate new password</button>
+        </form>
+    </div>
+    <script src="{{.AuthURI}}/assets/bootstrap.bundle.min.js"></script>
+    <script src="{{.AuthURI}}/assets/clipboard.min.js"></script>
+    <script>
+        const clipboard = new ClipboardJS('[data-clipboard-target]', {
+            text: trigger => {
+                const input = document.querySelector(trigger.getAttribute('data-clipboard-target'));
+                if (input.type == 'password') {
+                    input.type = 'text';
+                    const text = input.value;
+                    input.type = 'password';
+                    return text;
+                }
+                return input.value;
+            }
+        });
+        clipboard.on('success', function (e) {
+            const tip = new bootstrap.Tooltip(e.trigger, { trigger: 'manual', title: 'Copied!' });
+            tip.show();
+            setTimeout(function () { tip.hide(); }, 1000);
+        });
+    </script>
+</body>
+
+</html>

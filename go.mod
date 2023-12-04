@@ -1,4 +1,4 @@
-module proxy
+module easy-basic-auth-proxy
 
 go 1.21.4
 

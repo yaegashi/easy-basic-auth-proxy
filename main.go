@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net/http"
@@ -19,18 +22,24 @@ import (
 )
 
 const (
-	EnvUpstream                   = "APP_UPSTREAM"
-	EnvListen                     = "APP_LISTEN"
-	EnvStorePath                  = "APP_STORE_PATH"
-	DefaultUpstream               = "http://127.0.0.1:5000"
-	DefaultListen                 = ":8080"
-	DefaultStorePath              = "store"
-	EasyAuthPrincipalHeaderName   = "X-Ms-Client-Principal"
-	EasyAuthPrincipalIdHeaderName = "X-Ms-Client-Principal-Id"
-	EasyAuthAccessTokenHeaderName = "X-Ms-Token-Aad-Access-Token"
-	EasyAuthIdTokenHeaderName     = "X-Ms-Token-Aad-Id-Token"
-	PassphraseCharacterSet        = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	EnvListen                       = "EBAP_LISTEN"
+	EnvAuthURI                      = "EBAP_AUTH_URI"
+	EnvUpstreamURI                  = "EBAP_UPSTREAM_URI"
+	EnvAccountDir                   = "EBAP_ACCOUNT_DIR"
+	DefaultListen                   = ":8080"
+	DefaultUpstreamURI              = "http://127.0.0.1:8081"
+	DefaultAccountDir               = "accounts"
+	DefaultAuthURI                  = "/auth"
+	EasyAuthPrincipalHeaderName     = "X-Ms-Client-Principal"
+	EasyAuthPrincipalIdHeaderName   = "X-Ms-Client-Principal-Id"
+	EasyAuthPrincipalNameHeaderName = "X-Ms-Client-Principal-Name"
+	EasyAuthAccessTokenHeaderName   = "X-Ms-Token-Aad-Access-Token"
+	EasyAuthIdTokenHeaderName       = "X-Ms-Token-Aad-Id-Token"
+	PasswordCharacterSet            = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 )
+
+//go:embed assets templates
+var embedFS embed.FS
 
 type Account struct {
 	Password  string    `json:"password"`
@@ -38,17 +47,19 @@ type Account struct {
 }
 
 type App struct {
-	Upstream     string
 	Listen       string
-	StorePath    string
-	AccountList  *sync.Map
+	AuthURI      string
+	UpstreamURI  string
+	AccountDir   string
+	AccountMap   *sync.Map
 	ProxyHandler *httputil.ReverseProxy
+	Template     *template.Template
 }
 
 func (app *App) GeneratePassphrase(n int) string {
 	p := make([]byte, n)
 	for i := 0; i < n; i++ {
-		p[i] = PassphraseCharacterSet[rand.Intn(len(PassphraseCharacterSet))]
+		p[i] = PasswordCharacterSet[rand.Intn(len(PasswordCharacterSet))]
 	}
 	return string(p)
 }
@@ -64,25 +75,52 @@ func (app *App) DebugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) EasyAuthHandler(w http.ResponseWriter, r *http.Request) {
-	id := r.Header.Get(EasyAuthPrincipalIdHeaderName)
+	if r.URL.Path != app.AuthURI {
+		sub, _ := fs.Sub(embedFS, "assets")
+		http.StripPrefix(app.AuthURI, http.FileServer(http.FS(sub))).ServeHTTP(w, r)
+		return
+	}
+
+	id := r.FormValue("id")
+	if id == "" {
+		id = r.Header.Get(EasyAuthPrincipalIdHeaderName)
+	}
 	if id == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	p := app.GeneratePassphrase(32)
-	hash, err := bcrypt.GenerateFromPassword([]byte(p), bcrypt.DefaultCost)
+
+	account, err := app.LoadAccount(id)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+		account = &Account{}
 	}
-	account := &Account{
-		Password:  string(hash),
-		ExpiresOn: time.Now().Add(7 * 24 * time.Hour),
+	account.ExpiresOn = time.Now().Add(7 * 24 * time.Hour)
+
+	var password string
+	if r.Method == http.MethodPost {
+		password = app.GeneratePassphrase(32)
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		account.Password = string(hash)
 	}
-	app.StoreAccount(id, account)
-	w.Header().Set("Content-Type", "text/plain")
+
+	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "User: %s\nPass: %s\n", id, p)
+
+	data := struct{ AuthURI, Username, Password, ExpiresOn string }{
+		AuthURI:   app.AuthURI,
+		Username:  id,
+		Password:  password,
+		ExpiresOn: account.ExpiresOn.Format(time.RFC3339),
+	}
+
+	err = app.Template.Execute(w, data)
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func (app *App) BasicAuth(user, pass string) bool {
@@ -108,17 +146,17 @@ func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) StoreAccount(id string, account *Account) error {
-	app.AccountList.Store(id, account)
+	app.AccountMap.Store(id, account)
 	b, err := json.Marshal(account)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(app.StorePath, id)
+	path := filepath.Join(app.AccountDir, id)
 	return os.WriteFile(path, b, 0600)
 }
 
 func (app *App) LoadAccount(id string) (*Account, error) {
-	aany, ok := app.AccountList.Load(id)
+	aany, ok := app.AccountMap.Load(id)
 	if !ok {
 		return nil, fmt.Errorf("account not found")
 	}
@@ -129,18 +167,18 @@ func (app *App) LoadAccount(id string) (*Account, error) {
 	return account, nil
 }
 
-func (app *App) Initialize() error {
-	err := os.Mkdir(app.StorePath, 0700)
+func (app *App) Main(ctx context.Context) error {
+	err := os.Mkdir(app.AccountDir, 0700)
 	if err != nil && !os.IsExist(err) {
 		return err
 	}
-	app.AccountList = &sync.Map{}
-	files, err := os.ReadDir(app.StorePath)
+	files, err := os.ReadDir(app.AccountDir)
 	if err != nil {
 		return err
 	}
+	app.AccountMap = &sync.Map{}
 	for _, file := range files {
-		path := filepath.Join(app.StorePath, file.Name())
+		path := filepath.Join(app.AccountDir, file.Name())
 		b, err := os.ReadFile(path)
 		if err != nil {
 			log.Println(err)
@@ -152,42 +190,40 @@ func (app *App) Initialize() error {
 			log.Println(err)
 			continue
 		}
-		app.AccountList.Store(file.Name(), account)
+		app.AccountMap.Store(file.Name(), account)
 	}
-	return nil
-}
-
-func (app *App) Main(ctx context.Context) error {
-	err := app.Initialize()
-	if err != nil {
-		return err
-	}
-	u, err := url.Parse(app.Upstream)
+	u, err := url.Parse(app.UpstreamURI)
 	if err != nil {
 		return err
 	}
 	app.ProxyHandler = httputil.NewSingleHostReverseProxy(u)
+	app.Template, _ = template.New("index.html").ParseFS(embedFS, "templates/index.html")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/", app.EasyAuthHandler)
+	mux.Handle(filepath.Join(app.AuthURI, "assets")+"/", http.StripPrefix(app.AuthURI, http.FileServer(http.FS(embedFS))))
+	mux.HandleFunc(app.AuthURI, app.EasyAuthHandler)
 	mux.HandleFunc("/", app.BasicAuthHandler)
 	return http.ListenAndServe(app.Listen, mux)
 }
 
 func main() {
 	app := App{
-		Upstream:    os.Getenv(EnvUpstream),
 		Listen:      os.Getenv(EnvListen),
-		StorePath:   os.Getenv(EnvStorePath),
-		AccountList: &sync.Map{},
-	}
-	if app.Upstream == "" {
-		app.Upstream = DefaultUpstream
+		AuthURI:     os.Getenv(EnvAuthURI),
+		UpstreamURI: os.Getenv(EnvUpstreamURI),
+		AccountDir:  os.Getenv(EnvAccountDir),
+		AccountMap:  &sync.Map{},
 	}
 	if app.Listen == "" {
 		app.Listen = DefaultListen
 	}
-	if app.StorePath == "" {
-		app.StorePath = DefaultStorePath
+	if app.AuthURI == "" {
+		app.AuthURI = DefaultAuthURI
+	}
+	if app.UpstreamURI == "" {
+		app.UpstreamURI = DefaultUpstreamURI
+	}
+	if app.AccountDir == "" {
+		app.AccountDir = DefaultAccountDir
 	}
 	err := app.Main(context.Background())
 	if err != nil {
