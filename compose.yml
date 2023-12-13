@@ -1,13 +1,17 @@
 version: "3"
 services:
-  proxy:
+  ebap:
+    image: ghcr.io/yaegashi/easy-basic-auth-proxy
     build: .
     ports:
-      - "8080:8080"
+      - "8080:80"
     environment:
-      EABP_UPSTREAM_URI: http://bagetter:8080
-      EABP_ACCOUNTS_DIR: /accounts
+      EBAP_LISTEN: :80
+      EBAP_TARGET_URL: http://whoami:8080
+      EBAP_ACCOUNTS_DIR: /data/ebap/accounts
     volumes:
-      - ./data/sccounts:/accounts
-  bagetter:
-    image: bagetter/bagetter
+      - ./data/ebap:/data/ebap
+  whoami:
+    image: traefik/whoami
+    command:
+      - --port=8080

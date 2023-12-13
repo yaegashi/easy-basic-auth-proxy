@@ -23,13 +23,13 @@ import (
 
 const (
 	EnvListen                       = "EBAP_LISTEN"
-	EnvAuthURI                      = "EBAP_AUTH_URI"
-	EnvUpstreamURI                  = "EBAP_UPSTREAM_URI"
-	EnvAccountDir                   = "EBAP_ACCOUNT_DIR"
+	EnvAuthPath                     = "EBAP_AUTH_PATH"
+	EnvTargetURL                    = "EBAP_TARGET_URL"
+	EnvAccountsDir                  = "EBAP_ACCOUNTS_DIR"
 	DefaultListen                   = ":8080"
-	DefaultUpstreamURI              = "http://127.0.0.1:8081"
-	DefaultAccountDir               = "accounts"
-	DefaultAuthURI                  = "/auth"
+	DefaultAuthPath                 = "/auth"
+	DefaultTargetURL                = "http://127.0.0.1:8081"
+	DefaultAccountsDir              = "accounts"
 	EasyAuthPrincipalHeaderName     = "X-Ms-Client-Principal"
 	EasyAuthPrincipalIdHeaderName   = "X-Ms-Client-Principal-Id"
 	EasyAuthPrincipalNameHeaderName = "X-Ms-Client-Principal-Name"
@@ -48,10 +48,10 @@ type Account struct {
 
 type App struct {
 	Listen       string
-	AuthURI      string
-	UpstreamURI  string
-	AccountDir   string
-	AccountMap   *sync.Map
+	AuthPath     string
+	TargetURL    string
+	AccountsDir  string
+	AccountsMap  *sync.Map
 	ProxyHandler *httputil.ReverseProxy
 	Template     *template.Template
 }
@@ -64,33 +64,44 @@ func (app *App) GeneratePassphrase(n int) string {
 	return string(p)
 }
 
+func (app *App) GetUsername(r *http.Request) string {
+	username := r.FormValue("id")
+	if username == "" {
+		username = r.Header.Get(EasyAuthPrincipalIdHeaderName)
+	}
+	return username
+}
+
 func (app *App) DebugHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
-	e := os.Environ()
-	sort.Slice(e, func(i, j int) bool { return e[i] < e[j] })
-	for _, v := range e {
-		fmt.Fprintln(w, v)
+	keys := make([]string, 0, len(r.Header))
+	for k := range r.Header {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	fmt.Fprintf(w, "%s %s\n", r.Method, r.URL)
+	for _, key := range keys {
+		for _, val := range r.Header[key] {
+			fmt.Fprintf(w, "%s: %s\n", key, val)
+		}
 	}
 }
 
 func (app *App) EasyAuthHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != app.AuthURI {
+	if r.URL.Path != app.AuthPath {
 		sub, _ := fs.Sub(embedFS, "assets")
-		http.StripPrefix(app.AuthURI, http.FileServer(http.FS(sub))).ServeHTTP(w, r)
+		http.StripPrefix(app.AuthPath, http.FileServer(http.FS(sub))).ServeHTTP(w, r)
 		return
 	}
 
-	id := r.FormValue("id")
-	if id == "" {
-		id = r.Header.Get(EasyAuthPrincipalIdHeaderName)
-	}
-	if id == "" {
+	username := app.GetUsername(r)
+	if username == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	account, err := app.LoadAccount(id)
+	account, err := app.LoadAccount(username)
 	if err != nil {
 		account = &Account{}
 	}
@@ -107,17 +118,18 @@ func (app *App) EasyAuthHandler(w http.ResponseWriter, r *http.Request) {
 		account.Password = string(hash)
 	}
 
-	w.Header().Set("Content-Type", "text/html")
-	w.WriteHeader(http.StatusOK)
+	app.StoreAccount(username, account)
 
-	data := struct{ AuthURI, Username, Password, ExpiresOn string }{
-		AuthURI:   app.AuthURI,
-		Username:  id,
+	data := struct{ AuthPath, Username, Password, ExpiresOn string }{
+		AuthPath:  app.AuthPath,
+		Username:  username,
 		Password:  password,
 		ExpiresOn: account.ExpiresOn.Format(time.RFC3339),
 	}
 
-	err = app.Template.Execute(w, data)
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	err = app.Template.ExecuteTemplate(w, "auth.html", data)
 	if err != nil {
 		log.Println(err)
 	}
@@ -138,25 +150,47 @@ func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
 	user, pass, ok := r.BasicAuth()
 	ok = ok && app.BasicAuth(user, pass)
 	if !ok {
+		log.Printf("%s Unauthorized %s %s", r.RemoteAddr, r.Method, r.URL)
+		r.URL.Scheme = ""
+		r.URL.Host = ""
+		redirect := r.URL.String()
+		if r.Method != http.MethodGet {
+			redirect = "/"
+		}
+		getURL := fmt.Sprintf("%s?redirect=%s", app.AuthPath, url.QueryEscape(redirect))
+		if app.GetUsername(r) == "" {
+			getURL = fmt.Sprintf("/.auth/login/aad?post_login_redirect_url=%s&redirect=%s", url.QueryEscape(app.AuthPath), url.QueryEscape(redirect))
+		}
+		data := struct{ AuthPath, GetURL, Message string }{
+			AuthPath: app.AuthPath,
+			GetURL:   getURL,
+			Message:  "Get your username/password to open this web site.",
+		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusUnauthorized)
+		err := app.Template.ExecuteTemplate(w, "401.html", data)
+		if err != nil {
+			log.Println(err)
+		}
 		return
 	}
+	log.Printf("%s Proxy %s %s", r.RemoteAddr, r.Method, r.URL)
 	app.ProxyHandler.ServeHTTP(w, r)
 }
 
 func (app *App) StoreAccount(id string, account *Account) error {
-	app.AccountMap.Store(id, account)
+	app.AccountsMap.Store(id, account)
 	b, err := json.Marshal(account)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(app.AccountDir, id)
+	path := filepath.Join(app.AccountsDir, id)
 	return os.WriteFile(path, b, 0600)
 }
 
 func (app *App) LoadAccount(id string) (*Account, error) {
-	aany, ok := app.AccountMap.Load(id)
+	aany, ok := app.AccountsMap.Load(id)
 	if !ok {
 		return nil, fmt.Errorf("account not found")
 	}
@@ -168,17 +202,17 @@ func (app *App) LoadAccount(id string) (*Account, error) {
 }
 
 func (app *App) Main(ctx context.Context) error {
-	err := os.Mkdir(app.AccountDir, 0700)
+	err := os.Mkdir(app.AccountsDir, 0700)
 	if err != nil && !os.IsExist(err) {
 		return err
 	}
-	files, err := os.ReadDir(app.AccountDir)
+	files, err := os.ReadDir(app.AccountsDir)
 	if err != nil {
 		return err
 	}
-	app.AccountMap = &sync.Map{}
+	app.AccountsMap = &sync.Map{}
 	for _, file := range files {
-		path := filepath.Join(app.AccountDir, file.Name())
+		path := filepath.Join(app.AccountsDir, file.Name())
 		b, err := os.ReadFile(path)
 		if err != nil {
 			log.Println(err)
@@ -190,40 +224,41 @@ func (app *App) Main(ctx context.Context) error {
 			log.Println(err)
 			continue
 		}
-		app.AccountMap.Store(file.Name(), account)
+		app.AccountsMap.Store(file.Name(), account)
 	}
-	u, err := url.Parse(app.UpstreamURI)
+	u, err := url.Parse(app.TargetURL)
 	if err != nil {
 		return err
 	}
 	app.ProxyHandler = httputil.NewSingleHostReverseProxy(u)
-	app.Template, _ = template.New("index.html").ParseFS(embedFS, "templates/index.html")
+	app.Template, _ = template.ParseFS(embedFS, "templates/*")
 	mux := http.NewServeMux()
-	mux.Handle(filepath.Join(app.AuthURI, "assets")+"/", http.StripPrefix(app.AuthURI, http.FileServer(http.FS(embedFS))))
-	mux.HandleFunc(app.AuthURI, app.EasyAuthHandler)
+	mux.Handle(filepath.Join(app.AuthPath, "assets")+"/", http.StripPrefix(app.AuthPath, http.FileServer(http.FS(embedFS))))
+	mux.HandleFunc(filepath.Join(app.AuthPath, "debug")+"/", app.DebugHandler)
+	mux.HandleFunc(app.AuthPath, app.EasyAuthHandler)
 	mux.HandleFunc("/", app.BasicAuthHandler)
+	log.Println("Listening on ", app.Listen)
 	return http.ListenAndServe(app.Listen, mux)
 }
 
 func main() {
 	app := App{
 		Listen:      os.Getenv(EnvListen),
-		AuthURI:     os.Getenv(EnvAuthURI),
-		UpstreamURI: os.Getenv(EnvUpstreamURI),
-		AccountDir:  os.Getenv(EnvAccountDir),
-		AccountMap:  &sync.Map{},
+		AuthPath:    os.Getenv(EnvAuthPath),
+		TargetURL:   os.Getenv(EnvTargetURL),
+		AccountsDir: os.Getenv(EnvAccountsDir),
 	}
 	if app.Listen == "" {
 		app.Listen = DefaultListen
 	}
-	if app.AuthURI == "" {
-		app.AuthURI = DefaultAuthURI
+	if app.AuthPath == "" {
+		app.AuthPath = DefaultAuthPath
 	}
-	if app.UpstreamURI == "" {
-		app.UpstreamURI = DefaultUpstreamURI
+	if app.TargetURL == "" {
+		app.TargetURL = DefaultTargetURL
 	}
-	if app.AccountDir == "" {
-		app.AccountDir = DefaultAccountDir
+	if app.AccountsDir == "" {
+		app.AccountsDir = DefaultAccountsDir
 	}
 	err := app.Main(context.Background())
 	if err != nil {

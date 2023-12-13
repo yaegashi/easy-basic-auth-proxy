@@ -7,9 +7,6 @@
 		"ghcr.io/devcontainers/features/azure-cli:1": {
 			"version": "latest"
 		},
-		"ghcr.io/devcontainers/features/dotnet:2": {
-			"version": "latest"
-		},
 		"ghcr.io/devcontainers/features/go:1": {
 			"version": "latest"
 		},
@@ -22,6 +19,16 @@
 			"installDockerBuildx": true,
 			"version": "latest",
 			"dockerDashComposeVersion": "none"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"GitHub.vscode-github-actions",
+				"ms-azuretools.azure-dev",
+				"ms-azuretools.vscode-bicep",
+				"ms-azuretools.vscode-docker"
+			]
 		}
 	},
 	"postCreateCommand": "bash -x .devcontainer/install-dev-tools.sh"

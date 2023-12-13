@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
 
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Easy Basic Auth Proxy</title>
-    <link href="{{.AuthURI}}/assets/bootstrap.min.css" rel="stylesheet">
+    <link href="{{.AuthPath}}/assets/bootstrap.min.css" rel="stylesheet">
 </head>
 
 <body>
@@ -37,8 +37,8 @@
             <button class="btn btn-secondary" type="submit">Generate new password</button>
         </form>
     </div>
-    <script src="{{.AuthURI}}/assets/bootstrap.bundle.min.js"></script>
-    <script src="{{.AuthURI}}/assets/clipboard.min.js"></script>
+    <script src="{{.AuthPath}}/assets/bootstrap.bundle.min.js"></script>
+    <script src="{{.AuthPath}}/assets/clipboard.min.js"></script>
     <script>
         const clipboard = new ClipboardJS('[data-clipboard-target]', {
             text: trigger => {
