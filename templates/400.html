@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Easy Basic Auth Proxy: bad configuration</title>
+    <link href="{{.AuthPath}}/assets/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <h2>Easy Basic Auth Proxy: bad configuration</h2>
+        <p>The built-in authentication (Easy Auth) is not enabled.</p>
+        {{if .Development}}
+        <form method="get" action="/auth">
+            <div class="mb-3">
+                <label class="form-label" for="username">Username for development</label>
+                <input class="form-control" id="username" name="username" type="text" size="64" />
+            </div>
+            <button class="btn btn-primary" type="submit">OK</button>
+        </form>
+        {{end}}
+    </div>
+</body>

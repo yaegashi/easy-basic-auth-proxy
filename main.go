@@ -26,6 +26,7 @@ const (
 	EnvAuthPath                     = "EBAP_AUTH_PATH"
 	EnvTargetURL                    = "EBAP_TARGET_URL"
 	EnvAccountsDir                  = "EBAP_ACCOUNTS_DIR"
+	EnvDevelopment                  = "EBAP_DEVELOPMENT"
 	DefaultListen                   = ":8080"
 	DefaultAuthPath                 = "/auth"
 	DefaultTargetURL                = "http://127.0.0.1:8081"
@@ -52,6 +53,7 @@ type App struct {
 	AuthPath     string
 	TargetURL    string
 	AccountsDir  string
+	Development  string
 	AccountsMap  *sync.Map
 	ProxyHandler *httputil.ReverseProxy
 	Template     *template.Template
@@ -66,7 +68,10 @@ func (app *App) GeneratePassphrase(n int) string {
 }
 
 func (app *App) GetUsername(r *http.Request) string {
-	username := r.FormValue("id")
+	var username string
+	if app.Development != "" {
+		username = r.FormValue("username")
+	}
 	if username == "" {
 		username = r.Header.Get(EasyAuthPrincipalIdHeaderName)
 	}
@@ -146,6 +151,19 @@ func (app *App) BasicAuth(user, pass string) bool {
 		return false
 	}
 	return bcrypt.CompareHashAndPassword([]byte(account.Password), []byte(pass)) == nil
+}
+
+func (app *App) BadRequestHandler(w http.ResponseWriter, r *http.Request) {
+	data := struct{ AuthPath, Development string }{
+		AuthPath:    app.AuthPath,
+		Development: app.Development,
+	}
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusBadRequest)
+	err := app.Template.ExecuteTemplate(w, "400.html", data)
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +256,8 @@ func (app *App) Main(ctx context.Context) error {
 	mux.Handle(filepath.Join(app.AuthPath, "assets")+"/", http.StripPrefix(app.AuthPath, http.FileServer(http.FS(embedFS))))
 	mux.HandleFunc(filepath.Join(app.AuthPath, "debug")+"/", app.DebugHandler)
 	mux.HandleFunc(app.AuthPath, app.EasyAuthHandler)
+	mux.HandleFunc("/.auth/login/", app.BadRequestHandler)
+	mux.HandleFunc("/.auth/logout", app.BadRequestHandler)
 	mux.HandleFunc("/", app.BasicAuthHandler)
 	log.Println("Listening on ", app.Listen)
 	return http.ListenAndServe(app.Listen, mux)
@@ -249,6 +269,7 @@ func main() {
 		AuthPath:    os.Getenv(EnvAuthPath),
 		TargetURL:   os.Getenv(EnvTargetURL),
 		AccountsDir: os.Getenv(EnvAccountsDir),
+		Development: os.Getenv(EnvDevelopment),
 	}
 	if app.Listen == "" {
 		app.Listen = DefaultListen

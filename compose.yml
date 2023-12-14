@@ -9,6 +9,7 @@ services:
       EBAP_LISTEN: :80
       EBAP_TARGET_URL: http://whoami:8080
       EBAP_ACCOUNTS_DIR: /data/ebap/accounts
+      EBAP_DEVELOPMENT: true
     volumes:
       - ./data/ebap:/data/ebap
   whoami:
