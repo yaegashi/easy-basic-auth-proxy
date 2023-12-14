@@ -35,6 +35,7 @@ const (
 	EasyAuthPrincipalNameHeaderName = "X-Ms-Client-Principal-Name"
 	EasyAuthAccessTokenHeaderName   = "X-Ms-Token-Aad-Access-Token"
 	EasyAuthIdTokenHeaderName       = "X-Ms-Token-Aad-Id-Token"
+	EasyAuthLoginPath               = "/.auth/login/aad"
 	PasswordCharacterSet            = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 )
 
@@ -97,7 +98,8 @@ func (app *App) EasyAuthHandler(w http.ResponseWriter, r *http.Request) {
 
 	username := app.GetUsername(r)
 	if username == "" {
-		w.WriteHeader(http.StatusBadRequest)
+		nextURL := fmt.Sprintf(EasyAuthLoginPath+"?post_login_redirect_url=%s", url.QueryEscape(app.AuthPath))
+		http.Redirect(w, r, nextURL, http.StatusFound)
 		return
 	}
 
@@ -159,7 +161,7 @@ func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		getURL := fmt.Sprintf("%s?redirect=%s", app.AuthPath, url.QueryEscape(redirect))
 		if app.GetUsername(r) == "" {
-			getURL = fmt.Sprintf("/.auth/login/aad?post_login_redirect_url=%s&redirect=%s", url.QueryEscape(app.AuthPath), url.QueryEscape(redirect))
+			getURL = fmt.Sprintf(EasyAuthLoginPath+"?post_login_redirect_url=%s&redirect=%s", url.QueryEscape(app.AuthPath), url.QueryEscape(redirect))
 		}
 		data := struct{ AuthPath, GetURL, Message string }{
 			AuthPath: app.AuthPath,
