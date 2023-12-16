@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -18,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/sessions"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -27,6 +29,7 @@ const (
 	EnvTargetURL                    = "EBAP_TARGET_URL"
 	EnvAccountsDir                  = "EBAP_ACCOUNTS_DIR"
 	EnvDevelopment                  = "EBAP_DEVELOPMENT"
+	EnvSessionKey                   = "EBAP_SESSION_KEY"
 	DefaultListen                   = ":8080"
 	DefaultAuthPath                 = "/auth"
 	DefaultTargetURL                = "http://127.0.0.1:8081"
@@ -38,10 +41,16 @@ const (
 	EasyAuthIdTokenHeaderName       = "X-Ms-Token-Aad-Id-Token"
 	EasyAuthLoginPath               = "/.auth/login/aad"
 	PasswordCharacterSet            = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	SessionAccountValueName         = "SessionAccount"
+	SessionCookieName               = "EBAPSession"
 )
 
 //go:embed assets templates
 var embedFS embed.FS
+
+type SessionAccount struct {
+	Username string
+}
 
 type Account struct {
 	Password  string    `json:"password"`
@@ -54,9 +63,23 @@ type App struct {
 	TargetURL    string
 	AccountsDir  string
 	Development  string
+	SessionKey   string
 	AccountsMap  *sync.Map
 	ProxyHandler *httputil.ReverseProxy
 	Template     *template.Template
+	SessionStore *sessions.CookieStore
+}
+
+func init() {
+	gob.Register(&SessionAccount{})
+}
+
+func (app *App) Session(r *http.Request) *sessions.Session {
+	session, _ := app.SessionStore.Get(r, SessionCookieName)
+	session.Options.HttpOnly = true
+	session.Options.Secure = true
+	session.Options.SameSite = http.SameSiteNoneMode
+	return session
 }
 
 func (app *App) GeneratePassphrase(n int) string {
@@ -71,6 +94,11 @@ func (app *App) GetUsername(r *http.Request) string {
 	var username string
 	if app.Development != "" {
 		username = r.FormValue("username")
+	}
+	if username == "" {
+		if s, ok := app.Session(r).Values[SessionAccountValueName].(*SessionAccount); ok {
+			username = s.Username
+		}
 	}
 	if username == "" {
 		username = r.Header.Get(EasyAuthPrincipalIdHeaderName)
@@ -127,6 +155,13 @@ func (app *App) EasyAuthHandler(w http.ResponseWriter, r *http.Request) {
 
 	app.StoreAccount(username, account)
 
+	session := app.Session(r)
+	session.Values[SessionAccountValueName] = &SessionAccount{Username: username}
+	err = session.Save(r, w)
+	if err != nil {
+		log.Println(err)
+	}
+
 	data := struct{ AuthPath, Username, Password, ExpiresOn string }{
 		AuthPath:  app.AuthPath,
 		Username:  username,
@@ -170,6 +205,14 @@ func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
 	user, pass, ok := r.BasicAuth()
 	ok = ok && app.BasicAuth(user, pass)
 	if !ok {
+		user = ""
+	}
+	log.Printf("user1: %s", user)
+	if user == "" {
+		user = app.GetUsername(r)
+	}
+	log.Printf("user2: %s", user)
+	if user == "" {
 		log.Printf("%s Unauthorized %s %s", r.RemoteAddr, r.Method, r.URL)
 		r.URL.Scheme = ""
 		r.URL.Host = ""
@@ -250,6 +293,7 @@ func (app *App) Main(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	app.SessionStore = sessions.NewCookieStore([]byte(app.SessionKey))
 	app.ProxyHandler = httputil.NewSingleHostReverseProxy(u)
 	app.Template, _ = template.ParseFS(embedFS, "templates/*")
 	mux := http.NewServeMux()
@@ -270,6 +314,7 @@ func main() {
 		TargetURL:   os.Getenv(EnvTargetURL),
 		AccountsDir: os.Getenv(EnvAccountsDir),
 		Development: os.Getenv(EnvDevelopment),
+		SessionKey:  os.Getenv(EnvSessionKey),
 	}
 	if app.Listen == "" {
 		app.Listen = DefaultListen

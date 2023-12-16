@@ -10,6 +10,7 @@ services:
       EBAP_TARGET_URL: http://whoami:8080
       EBAP_ACCOUNTS_DIR: /data/ebap/accounts
       EBAP_DEVELOPMENT: true
+      EBAP_SESSION_KEY: 0123456789abcdef0123456789abcdef
     volumes:
       - ./data/ebap:/data/ebap
   whoami:
