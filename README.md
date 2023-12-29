@@ -15,7 +15,8 @@ The public container image of easy-basic-auth-proxy is readily available on the 
 
 Sample application of easy-basic-auth-proxy:
 
-- [dx2devops-nuget-server](https://github.com/yaegashi/dx2devops-nuget-server)
+- [yaegashi/dx2devops-nuget-server](https://github.com/yaegashi/dx2devops-nuget-server)
+... Private NuGet server on Azure Container Apps
 
 ## Configuration
 
@@ -28,6 +29,7 @@ The configuration of easy-basic-auth-proxy can be managed through environment va
 |`EBAP_TARGET_URL`|`http://127.0.0.1:8081`|Proxy target URL|
 |`EBAP_ACCOUNTS_DIR`|`accounts`|User account data directory|
 |`EBAP_DEVELOPMENT`||Development mode (enabled if not empty)|
+|`EBAP_SESSION_KEY`|`secret`|Session encryption key (arbitrary random string)|
 
 ## Sample solution overview
 
