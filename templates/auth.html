@@ -4,37 +4,58 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Easy Basic Auth Proxy</title>
+    <title>Easy Basic Auth Proxy: Configuration</title>
     <link href="{{.AuthPath}}/assets/bootstrap.min.css" rel="stylesheet">
 </head>
 
 <body>
     <div class="container">
-        <h2>Easy Basic Auth Proxy</h2>
-        <form method="post">
-            <div class="mb-3">
-                <label class="form-label" for="username">Username</label>
-                <div class="input-group">
-                    <input class="form-control" id="username" type="text" size="64" value="{{.Username}}" readonly />
-                    <button class="btn btn-outline-secondary" type="button"
-                        data-clipboard-target="#username">Copy</button>
-                </div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label" for="password">Password</label>
-                <div class="input-group">
-                    <input class="form-control" id="password" type="password" size="64" value="{{.Password}}"
-                        readonly />
-                    <button class="btn btn-outline-secondary" type="button"
-                        data-clipboard-target="#password">Copy</button>
-                </div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label" for="expresOn">Password expires on</label>
-                <input class="form-control" id="expiresOn" type="text" size="64" value="{{.ExpiresOn}}" readonly />
-            </div>
+        <p class="h2">Easy Basic Auth Proxy</p>
+        <p class="h4">Cookie Auth Session</p>
+        <div class="mb-3">
             <a class="btn btn-primary" target="_blank" href="/">Open web site in new tab</a>
-            <button class="btn btn-secondary" type="submit">Generate new password</button>
+            <a class="btn btn-secondary" href="{{.AuthPath}}?logout=true">Sign out</a>
+        </div>
+        <p class="h4">Basic Auth Credentials</p>
+        <div class="mb-3">
+            <div class="input-group">
+                <span class="input-group-text">Username</span>
+                <input class="form-control" id="username" type="text" size="64" value="{{.Username}}" readonly />
+                <button class="btn btn-outline-secondary" type="button" data-clipboard-target="#username">Copy</button>
+            </div>
+        </div>
+        {{range $i, $s := .Secrets}}
+        <form method="post" class="mb-3">
+            <div class="input-group">
+                <span class="input-group-text">Secret</span>
+                <input class="form-control" id="description-{{$i}}" type="text" size="64" value="{{$s.Description}}"
+                    readonly />
+                {{if $s.Password}}
+                <span class="input-group-text">Password</span>
+                <input class="form-control" id="password-{{$i}}" type="password" size="64" value="{{$s.Password}}"
+                    readonly />
+                <button class="btn btn-outline-secondary" type="button"
+                    data-clipboard-target="#password-{{$i}}">Copy</button>
+                {{end}}
+                <span class="input-group-text">Expires at</span>
+                <input class="form-control" id="expiresAt-{{$i}}" type="text" size="64"
+                    value="{{$s.ExpiresAt.Format `2006-01-02T15:04:05Z07:00`}}" readonly />
+                <button class="btn btn-outline-secondary" type="submit" name="revoke" value="{{$i}}">Revoke</button>
+            </div>
+        </form>
+        {{end}}
+        <form method="post" class="mb-3">
+            <div class="input-group">
+                <span class="input-group-text">New Secret</span>
+                <input class="form-control" type="text" size="64" name="description" placeholder="Enter description" />
+                <span class="input-group-text">Expires in</span>
+                <select class="form-select" name="expiresIn">
+                    <option value="7" selected>7 days</option>
+                    <option value="30">30 days</option>
+                    <option value="365">365 days</option>
+                </select>
+                <button class="btn btn-outline-secondary" type="submit" name="generate" value="true">Generate</button>
+            </div>
         </form>
     </div>
     <script src="{{.AuthPath}}/assets/bootstrap.bundle.min.js"></script>

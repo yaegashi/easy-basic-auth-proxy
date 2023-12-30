@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -53,8 +54,14 @@ type SessionAccount struct {
 }
 
 type Account struct {
-	Password  string    `json:"password"`
-	ExpiresOn time.Time `json:"expires_on"`
+	Secrets []Secret `json:"secrets"`
+}
+
+type Secret struct {
+	Hash        string    `json:"hash"`
+	Password    string    `json:"-"`
+	Description string    `json:"description"`
+	ExpiresAt   time.Time `json:"expires_at"`
 }
 
 type App struct {
@@ -90,20 +97,11 @@ func (app *App) GeneratePassphrase(n int) string {
 	return string(p)
 }
 
-func (app *App) GetUsername(r *http.Request) string {
-	var username string
-	if app.Development != "" {
-		username = r.FormValue("username")
+func (app *App) GetUsernameFromCookie(r *http.Request) string {
+	if s, ok := app.Session(r).Values[SessionAccountValueName].(*SessionAccount); ok {
+		return s.Username
 	}
-	if username == "" {
-		if s, ok := app.Session(r).Values[SessionAccountValueName].(*SessionAccount); ok {
-			username = s.Username
-		}
-	}
-	if username == "" {
-		username = r.Header.Get(EasyAuthPrincipalIdHeaderName)
-	}
-	return username
+	return ""
 }
 
 func (app *App) DebugHandler(w http.ResponseWriter, r *http.Request) {
@@ -129,8 +127,27 @@ func (app *App) EasyAuthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := app.GetUsername(r)
+	r.ParseForm()
+	session := app.Session(r)
+	if r.FormValue("logout") != "" {
+		session.Values[SessionAccountValueName] = nil
+		err := session.Save(r, w)
+		if err != nil {
+			log.Println(err)
+		}
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+
+	username := app.GetUsernameFromCookie(r)
+	if username == "" && app.Development != "" {
+		username = r.FormValue("username")
+	}
 	if username == "" {
+		username = r.Header.Get(EasyAuthPrincipalIdHeaderName)
+	}
+	if username == "" {
+		session.Values[SessionAccountValueName] = nil
 		nextURL := fmt.Sprintf(EasyAuthLoginPath+"?post_login_redirect_url=%s", url.QueryEscape(app.AuthPath))
 		http.Redirect(w, r, nextURL, http.StatusFound)
 		return
@@ -140,33 +157,56 @@ func (app *App) EasyAuthHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		account = &Account{}
 	}
-	account.ExpiresOn = time.Now().Add(7 * 24 * time.Hour)
 
-	var password string
 	if r.Method == http.MethodPost {
-		password = app.GeneratePassphrase(32)
-		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+		if r.FormValue("generate") != "" {
+			description := r.FormValue("description")
+			if description == "" {
+				description = fmt.Sprintf("Generated at %s", time.Now().Format(time.RFC3339))
+			}
+			expiresIn := r.FormValue("expiresIn")
+			expiresInTable := map[string]time.Duration{
+				"7":   7 * 24 * time.Hour,
+				"30":  30 * 24 * time.Hour,
+				"365": 365 * 24 * time.Hour,
+			}
+			expiresInDuration, _ := expiresInTable[expiresIn]
+			expiresAt := time.Now().Add(expiresInDuration)
+			password := app.GeneratePassphrase(32)
+			hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			secret := Secret{
+				Hash:        string(hash),
+				Password:    password,
+				Description: description,
+				ExpiresAt:   expiresAt,
+			}
+			account.Secrets = append(account.Secrets, secret)
+			app.StoreAccount(username, account)
+		} else if i, err := strconv.Atoi(r.FormValue("revoke")); err == nil {
+			if i >= 0 && i < len(account.Secrets) {
+				account.Secrets = append(account.Secrets[:i], account.Secrets[i+1:]...)
+				app.StoreAccount(username, account)
+			}
 		}
-		account.Password = string(hash)
 	}
 
-	app.StoreAccount(username, account)
-
-	session := app.Session(r)
 	session.Values[SessionAccountValueName] = &SessionAccount{Username: username}
 	err = session.Save(r, w)
 	if err != nil {
 		log.Println(err)
 	}
 
-	data := struct{ AuthPath, Username, Password, ExpiresOn string }{
-		AuthPath:  app.AuthPath,
-		Username:  username,
-		Password:  password,
-		ExpiresOn: account.ExpiresOn.Format(time.RFC3339),
+	data := struct {
+		AuthPath, Username string
+		Secrets            []Secret
+	}{
+		AuthPath: app.AuthPath,
+		Username: username,
+		Secrets:  account.Secrets,
 	}
 
 	w.Header().Set("Content-Type", "text/html")
@@ -182,10 +222,15 @@ func (app *App) BasicAuth(user, pass string) bool {
 	if err != nil {
 		return false
 	}
-	if account.ExpiresOn.Before(time.Now()) {
-		return false
+	for _, secret := range account.Secrets {
+		if secret.ExpiresAt.Before(time.Now()) {
+			continue
+		}
+		if bcrypt.CompareHashAndPassword([]byte(secret.Hash), []byte(pass)) == nil {
+			return true
+		}
 	}
-	return bcrypt.CompareHashAndPassword([]byte(account.Password), []byte(pass)) == nil
+	return false
 }
 
 func (app *App) BadRequestHandler(w http.ResponseWriter, r *http.Request) {
@@ -202,17 +247,14 @@ func (app *App) BadRequestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
-	user, pass, ok := r.BasicAuth()
-	ok = ok && app.BasicAuth(user, pass)
-	if !ok {
-		user = ""
+	username, password, ok := r.BasicAuth()
+	if !ok || !app.BasicAuth(username, password) {
+		username = ""
 	}
-	log.Printf("user1: %s", user)
-	if user == "" {
-		user = app.GetUsername(r)
+	if username == "" {
+		username = app.GetUsernameFromCookie(r)
 	}
-	log.Printf("user2: %s", user)
-	if user == "" {
+	if username == "" {
 		log.Printf("%s Unauthorized %s %s", r.RemoteAddr, r.Method, r.URL)
 		r.URL.Scheme = ""
 		r.URL.Host = ""
@@ -220,14 +262,11 @@ func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			redirect = "/"
 		}
-		getURL := fmt.Sprintf("%s?redirect=%s", app.AuthPath, url.QueryEscape(redirect))
-		if app.GetUsername(r) == "" {
-			getURL = fmt.Sprintf(EasyAuthLoginPath+"?post_login_redirect_url=%s&redirect=%s", url.QueryEscape(app.AuthPath), url.QueryEscape(redirect))
-		}
+		getURL := fmt.Sprintf(EasyAuthLoginPath+"?post_login_redirect_url=%s&redirect=%s", url.QueryEscape(app.AuthPath), url.QueryEscape(redirect))
 		data := struct{ AuthPath, GetURL, Message string }{
 			AuthPath: app.AuthPath,
 			GetURL:   getURL,
-			Message:  "Get your username/password to open this web site.",
+			Message:  "Please sign in to open this web site.",
 		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 		w.Header().Set("Content-Type", "text/html")
@@ -243,8 +282,13 @@ func (app *App) BasicAuthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) StoreAccount(id string, account *Account) error {
-	app.AccountsMap.Store(id, account)
-	b, err := json.Marshal(account)
+	a := &Account{Secrets: make([]Secret, len(account.Secrets))}
+	for i, secret := range account.Secrets {
+		a.Secrets[i] = secret
+		a.Secrets[i].Password = ""
+	}
+	app.AccountsMap.Store(id, a)
+	b, err := json.Marshal(a)
 	if err != nil {
 		return err
 	}
