@@ -2,12 +2,11 @@
 
 ## Introduction
 
-**easy-basic-auth-proxy** is a web authentication frontend proxy
-that bridges Azure Easy Auth and Basic Auth.
-Users can use the Basic Auth protocol with temporary credentials,
-which are created on-the-fly from Easy Auth authenticated accounts,
-to access various backend applications that cannot directly support
-modern authentication methods.
+**easy-basic-auth-proxy** is a web authentication frontend proxy that supports Azure Easy Auth and standard HTTP Cookie/Basic Auth.
+
+> ![](doc/assets/ebap-config.png)
+
+This proxy allows Easy Auth authenticated users to manage multiple sets of Basic Auth credentials. Each set consists of a common username and a randomly generated secret string with a specific expiration time.  These Basic Auth credentials are particularly useful for legacy applications that cannot directly support modern authentication methods.
 
 The public container image of easy-basic-auth-proxy is readily available on the GitHub container registry:
 
@@ -29,7 +28,7 @@ The configuration of easy-basic-auth-proxy can be managed through environment va
 |`EBAP_TARGET_URL`|`http://127.0.0.1:8081`|Proxy target URL|
 |`EBAP_ACCOUNTS_DIR`|`accounts`|User account data directory|
 |`EBAP_DEVELOPMENT`||Development mode (enabled if not empty)|
-|`EBAP_SESSION_KEY`|`secret`|Session encryption key (arbitrary random string)|
+|`EBAP_SESSION_KEY`||Session encryption key (arbitrary random string)|
 
 ## Sample solution overview
 
@@ -59,8 +58,6 @@ $ docker compose up -d
 ## Sample solution with Azure Container Apps
 
 Use [Azure Developer CLI](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/overview) to deploay this solution on Azure Container Apps.
-After provisioning Azure resources with the CLI,
-you will need to configure the container app in the Azure Portal.
 
 ```console
 $ mkdir my-solution
@@ -69,3 +66,10 @@ $ azd init -t https://github.com/yaegashi/easy-basic-auth-proxy
 $ azd auth login
 $ azd provision
 ```
+
+After provisioning Azure resources with the CLI,
+you need to enable the built-in authentication for the container app in the Azure Portal.
+- Select **Microsoft** as the **Identity provider** (Microsoft Entra ID)
+- Enable **Allow unauthenticated access** in the **Restrict access** options
+
+> ![](doc/assets/easyauth-config.png)
