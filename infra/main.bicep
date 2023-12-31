@@ -9,11 +9,7 @@ param environmentName string
 @description('Primary location for all resources')
 param location string
 
-param principalId string
-
 param resourceGroupName string = ''
-
-param keyVaultName string = ''
 
 param storageAccountName string = ''
 
@@ -84,6 +80,7 @@ module app './app/apps.bicep' = {
     tags: tags
     storageAccountName: storageAccount.outputs.name
     containerAppsEnvironmentName: containerAppEnv.outputs.name
+    sessionKey: resourceToken
   }
 }
 

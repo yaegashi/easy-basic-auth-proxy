@@ -4,6 +4,8 @@ param location string = resourceGroup().location
 param tags object = {}
 param storageAccountName string
 param containerAppsEnvironmentName string
+@secure()
+param sessionKey string
 
 resource storage 'Microsoft.Storage/storageAccounts@2022-05-01' existing = {
   name: storageAccountName
@@ -58,6 +60,7 @@ resource app 'Microsoft.App/containerApps@2023-04-01-preview' = {
             { name: 'EBAP_LISTEN', value: ':80' }
             { name: 'EBAP_TARGET_URL', value: 'http://localhost:8080' }
             { name: 'EBAP_ACCOUNTS_DIR', value: '/data/ebap/accounts' }
+            { name: 'EBAP_SESSION_KEY', value: sessionKey }
           ]
           volumeMounts: [
             {
